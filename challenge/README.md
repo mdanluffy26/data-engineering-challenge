@@ -67,7 +67,15 @@ docker compose exec postgres-dw psql -U dw -d nyc_taxi -f /queries/q3_dia_viagem
 docker compose exec postgres-dw psql -U dw -d nyc_taxi -f /queries/q4_estatisticas_distancia.sql
 ```
 
+> No **Git Bash** (Windows), use `MSYS_NO_PATHCONV=1 docker compose exec ...` para o caminho `/queries/...`
+> não ser convertido para um caminho do Windows. No PowerShell os comandos funcionam como estão.
+
 Para derrubar tudo (incluindo os dados): `docker compose down -v`.
+
+### Execução de referência
+
+Ryzen 5 5600 / 16 GB para o Docker (WSL2): a DAG completa levou **~40 minutos** e o banco `nyc_taxi`
+ficou com **23 GB** (raw + trusted + refined).
 
 ## Passos do ETL
 
@@ -93,6 +101,9 @@ Para derrubar tudo (incluindo os dados): `docker compose down -v`.
   para permitir reprocessar a trusted sem reler os arquivos e auditar o que foi descartado.
 - **Idempotência**: toda tarefa pode ser reexecutada — raw/trusted apagam o arquivo antes de recarregar,
   e refined é reconstruída por completo.
+- **Retries automáticos** (2 tentativas, 1 min de intervalo). Na primeira execução, uma carga raw falhou por
+  uma falha transitória de DNS do Docker (`could not translate host name "postgres"`) no meio da carga pesada;
+  como as tarefas são idempotentes, basta tentar de novo — e foi o que resolveu.
 - **LocalExecutor** em vez do CeleryExecutor do compose oficial: menos containers (sem Redis/worker),
   suficiente para uma máquina só.
 - **Dois PostgreSQL**: um para os metadados do Airflow e outro (`postgres-dw`) só para os dados, com ajustes de
@@ -120,8 +131,8 @@ O detalhe por mês fica em `trusted.load_audit`.
 
 ## Respostas
 
-> ⚠️ Valores calculados na análise exploratória (pyarrow, mesmas regras). **Confirmar com o resultado da tarefa
-> `answer_questions` após rodar o pipeline no PostgreSQL.**
+Resultados obtidos no PostgreSQL (`refined.trips`) após a execução completa da DAG — os mesmos valores
+aparecem no log da tarefa `answer_questions` e coincidem com a análise exploratória feita com pyarrow.
 
 ### 1. Total de registros na tabela final
 

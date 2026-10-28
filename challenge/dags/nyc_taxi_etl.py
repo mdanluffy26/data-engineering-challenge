@@ -16,7 +16,7 @@ import io
 import logging
 import os
 import re
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 import pendulum
@@ -83,6 +83,8 @@ def run_sql_file(name: str, parameters: dict | None = None) -> None:
     start_date=pendulum.datetime(2022, 1, 1, tz="UTC"),
     catchup=False,
     max_active_runs=1,
+    # Todas as tarefas são idempotentes, então é seguro tentar de novo após falhas transitórias
+    default_args={"retries": 2, "retry_delay": timedelta(minutes=1)},
     tags=["nyc-taxi", "etl"],
     doc_md=__doc__,
 )
