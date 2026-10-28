@@ -1,0 +1,120 @@
+# Airflow 2.10 (LocalExecutor) + PostgreSQL.
+# Adaptado do docker-compose oficial do Airflow, sem Celery/Redis para ficar mais leve.
+#
+#   postgres     -> banco de metadados do Airflow
+#   postgres-dw  -> banco de dados do desafio (camadas raw / trusted / refined)
+
+x-airflow-common: &airflow-common
+  build: .
+  image: nyc-taxi-airflow:2.10.5
+  environment: &airflow-common-env
+    AIRFLOW__CORE__EXECUTOR: LocalExecutor
+    AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@postgres/airflow
+    AIRFLOW__CORE__FERNET_KEY: ''
+    AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: 'true'
+    AIRFLOW__CORE__LOAD_EXAMPLES: 'false'
+    AIRFLOW__CORE__PARALLELISM: 4
+    AIRFLOW__SCHEDULER__ENABLE_HEALTH_CHECK: 'true'
+    # Conexão com o banco do desafio, usada pela DAG (conn_id = nyc_taxi_dw)
+    AIRFLOW_CONN_NYC_TAXI_DW: postgres://dw:dw@postgres-dw:5432/nyc_taxi
+    NYC_TLC_DATA_DIR: /opt/airflow/data
+  volumes:
+    - ./dags:/opt/airflow/dags
+    - ./queries:/opt/airflow/queries:ro
+    - ./logs:/opt/airflow/logs
+    - ../nyc-tlc-data:/opt/airflow/data:ro
+  user: "${AIRFLOW_UID:-50000}:0"
+  depends_on: &airflow-common-depends-on
+    postgres:
+      condition: service_healthy
+    postgres-dw:
+      condition: service_healthy
+
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: airflow
+      POSTGRES_PASSWORD: airflow
+      POSTGRES_DB: airflow
+    volumes:
+      - airflow-db:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "airflow"]
+      interval: 10s
+      retries: 5
+      start_period: 5s
+    restart: always
+
+  postgres-dw:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: dw
+      POSTGRES_PASSWORD: dw
+      POSTGRES_DB: nyc_taxi
+    # Ajustes para carga em massa (~40 milhões de linhas)
+    command: >
+      postgres
+      -c shared_buffers=512MB
+      -c work_mem=64MB
+      -c maintenance_work_mem=512MB
+      -c max_wal_size=4GB
+      -c checkpoint_timeout=15min
+    ports:
+      - "${DW_PORT:-5433}:5432"
+    volumes:
+      - dw-db:/var/lib/postgresql/data
+      - ./queries:/queries:ro
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "dw", "-d", "nyc_taxi"]
+      interval: 10s
+      retries: 5
+      start_period: 5s
+    restart: always
+
+  airflow-webserver:
+    <<: *airflow-common
+    command: webserver
+    ports:
+      - "8080:8080"
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    restart: always
+    depends_on:
+      <<: *airflow-common-depends-on
+      airflow-init:
+        condition: service_completed_successfully
+
+  airflow-scheduler:
+    <<: *airflow-common
+    command: scheduler
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://localhost:8974/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    restart: always
+    depends_on:
+      <<: *airflow-common-depends-on
+      airflow-init:
+        condition: service_completed_successfully
+
+  airflow-init:
+    <<: *airflow-common
+    # O entrypoint da imagem migra o banco e cria o usuário a partir das variáveis _AIRFLOW_*
+    command: version
+    environment:
+      <<: *airflow-common-env
+      _AIRFLOW_DB_MIGRATE: 'true'
+      _AIRFLOW_WWW_USER_CREATE: 'true'
+      _AIRFLOW_WWW_USER_USERNAME: ${_AIRFLOW_WWW_USER_USERNAME:-airflow}
+      _AIRFLOW_WWW_USER_PASSWORD: ${_AIRFLOW_WWW_USER_PASSWORD:-airflow}
+
+volumes:
+  airflow-db:
+  dw-db:
